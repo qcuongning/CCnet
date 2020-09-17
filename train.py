@@ -1,111 +1,70 @@
 
-import torch
-import numpy as np
-import torch.optim as optim
-import torch.backends.cudnn as cudnn
-from networks.ccnet import Res_Deeplab, RCCAModule
-import timeit
-from utils.criterion import CriterionCrossEntropy, CriterionOhemCrossEntropy, CriterionDSN, CriterionOhemDSN
+
 import DataLoader
-#from torchsummary import summary
-from networks.unet import UNet
-start = timeit.default_timer()
 
-IMG_MEAN = np.array((104.00698793, 116.66876762, 122.67891434), dtype=np.float32)
+import torch
+import torch.optim as optim
+from torch.optim import lr_scheduler
+import time
+import copy
 
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms, datasets, models
 
+class SimDataset(Dataset):
+    def __init__(self, count, transform=None):
+        self.input_images, self.target_masks = simulation.generate_random_data(192, 192, count=count)
+        self.transform = transform
 
+    def __len__(self):
+        return len(self.input_images)
 
-# def str2bool(v):
-#     if v.lower() in ('yes', 'true', 't', 'y', '1'):
-#         return True
-#     elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-#         return False
-#     else:
-#         raise argparse.ArgumentTypeError('Boolean value expected.')
+    def __getitem__(self, idx):
+        image = self.input_images[idx]
+        mask = self.target_masks[idx]
+        if self.transform:
+            image = self.transform(image)
 
-
-
-
-
-
-def lr_poly(base_lr, iter, max_iter, power):
-    return base_lr * ((1 - float(iter) / max_iter) ** (power))
-
-
-# def adjust_learning_rate(optimizer, i_iter):
-#     """Sets the learning rate to the initial LR divided by 5 at 60th, 120th and 160th epochs"""
-#     lr = lr_poly(args.learning_rate, i_iter, args.num_steps, args.power)
-#     optimizer.param_groups[0]['lr'] = lr
-#     return lr
+        return [image, mask]
 
 
-def set_bn_eval(m):
-    classname = m.__class__.__name__
-    if classname.find('BatchNorm') != -1:
-        m.eval()
-
-
-def set_bn_momentum(m):
-    classname = m.__class__.__name__
-    if classname.find('BatchNorm') != -1 or classname.find('InPlaceABN') != -1:
-        m.momentum = 0.0003
 
 
 def main():
-    """Create the model and start the training."""
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print(device)
 
-    h, w = (320, 320)
-    input_size = (h, w)
+    num_class = 1
+    model = UNet(n_channels=3, n_classes=1).to(device)
 
-    cudnn.enabled = False
+    # freeze backbone layers
+    #for l in model.base_layers:
+    #    for param in l.parameters():
+    #        param.requires_grad = False
 
-    # Create network.
-    #model = Res_Deeplab(num_classes=1)
-    print("model_load")
-    #rcca_module = RCCAModule(64,128,1)
-    #model = deeplab
-    model = UNet(n_channels=3, n_classes=1)
-    #summary(rcca_module, (64, 320, 320))
+    optimizer_ft = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
 
-    #model.train()
-    #model.float()
-    #print(model)
-    ohem = True
-    # if ohem:
-    #     criterion = CriterionOhemDSN()
-    # else:
-    #     criterion = CriterionDSN()  # CriterionCrossEntropy()
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=30, gamma=0.1)
 
+    model = train_model(model, optimizer_ft, exp_lr_scheduler, num_epochs=60)
+if __name__ == "__main__":
+    # use the same transformations for train/val in this example
+    trans = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])  # imagenet
+    ])
 
-    criterion = torch.nn.BCELoss()
+    train_set = SimDataset(2000, transform=trans)
+    val_set = SimDataset(200, transform=trans)
 
-    imgs, masks = DataLoader.Loader('dataset/imgs','dataset/masks',(320,320))
-    print("load_data")
-    masks =np.expand_dims(masks, -1)
-    lr = 1e-3
-    optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.95, weight_decay=0.9)
-    optimizer.zero_grad()
-    num_steps = 100
-    for i_iter in range(100):
-        images, labels = imgs[i_iter],masks[i_iter]
-        images = torch.from_numpy(np.expand_dims(images,0)).permute(0,3,1,2)
-        labels = torch.from_numpy(np.expand_dims(labels,0)).permute(0,3,1,2)
-        optimizer.zero_grad()
-        lr = lr
-        preds= model(images)
-        print(preds.shape)
-        #print(labels.shape, preds.shape)
-        loss = criterion(preds, labels)
-        loss.backward()
-        optimizer.step()
+    image_datasets = {
+        'train': train_set, 'val': val_set
+    }
 
+    batch_size = 25
 
-        print('iter = {} of {} completed, loss = {}'.format(i_iter, num_steps, loss.item()))
-
-    end = timeit.default_timer()
-    print(end - start, 'seconds')
-
-
-if __name__ == '__main__':
+    dataloaders = {
+        'train': DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=0),
+        'val': DataLoader(val_set, batch_size=batch_size, shuffle=True, num_workers=0)
+    }
     main()
